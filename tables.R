@@ -48,7 +48,7 @@ create_logit_table <- function(ols_model, iv_model, data, market = "market", out
     df_iv <- iv_model$df.residual
     
     # Build LaTeX table
-    param_names <- c("Price", "X1", "X2", "X3", "X4", "Constant")
+    param_names <- c("Constant", "Price", "X1", "X2", "X3", "X4")
     
     latex_table <- paste0(
         "\\begin{table}[H] \\centering \n",

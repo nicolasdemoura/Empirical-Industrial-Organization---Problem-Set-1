@@ -24,7 +24,7 @@ gc()
 set.seed(20251115)
 
 # Set working directory
-setwd("C:/! PROJETOS/200 Graduate/2025.2/Empirical Industrial Organization - Problem Set 1/empirical")
+setwd("C:/! PROJETOS/200 Graduate/2025.2/Empirical Industrial Organization - Problem Set 1/Empirical-Industrial-Organization---Problem-Set-1")
 
 # Source BLP and elasticity functions
 source("blp.R")
