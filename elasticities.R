@@ -45,13 +45,15 @@ compute_blp_elasticities <- function(blp_params, data, product = "product", mark
                                      indVarying_chars = c("x4"), N = 1000) {
     sigma <- blp_params$sigma
     delta <- blp_params$delta
-    alpha <- blp_params$theta1[1]
+    # theta1 = [constant, price, x1, x2, x3, x4], so alpha (price coef) is at index 2
+    alpha <- -blp_params$theta1[2]  # negative because price has negative effect on utility
     
     # Number of products and individuals
     M <- length(unique(data[[market]]))
     I <- N
     
-    # Draw shocks v iid from N(0,1)
+    # Draw shocks v iid from N(0,1) - use same seed as estimation
+    set.seed(20251115)
     v <- matrix(rnorm(I * length(sigma)), nrow = I, ncol = length(sigma))
     
     # Initialize elasticity matrix
@@ -89,11 +91,11 @@ compute_blp_elasticities <- function(blp_params, data, product = "product", mark
                 if (j == k) {
                     # Own-price elasticity (negative)
                     elasticity_matrix[market_data[[product]][j], market_data[[product]][k]] <- 
-                        alpha * mean(choice_probabilities[, j] * (1 - choice_probabilities[, j])) * (market_data[[price]][j] / shares[j])
+                        -alpha * mean(choice_probabilities[, j] * (1 - choice_probabilities[, j])) * (market_data[[price]][j] / shares[j])
                 } else {
                     # Cross-price elasticity (positive)
                     elasticity_matrix[market_data[[product]][j], market_data[[product]][k]] <- 
-                        -alpha * mean(choice_probabilities[, j] * choice_probabilities[, k]) * (market_data[[price]][k] / shares[j])
+                        alpha * mean(choice_probabilities[, j] * choice_probabilities[, k]) * (market_data[[price]][k] / shares[j])
                 }
             }
         }
@@ -183,7 +185,7 @@ create_elasticity_heatmap <- function(elasticity_matrix, title = "Own- and Cross
 }
 
 # Create elasticity comparison table
-create_elasticity_comparison_table <- function(elasticity_matrix_logit, elasticity_matrix_blp) {
+create_elasticity_comparison_table <- function(elasticity_matrix_logit, elasticity_matrix_blp, elasticity_matrix_pyblp = NULL) {
     # Extract own-price elasticities (diagonal)
     own_logit <- diag(elasticity_matrix_logit)
     own_blp <- diag(elasticity_matrix_blp)
@@ -203,7 +205,52 @@ create_elasticity_comparison_table <- function(elasticity_matrix_logit, elastici
         min(cross_blp), median(cross_blp), max(cross_blp)
     )
     
-    # Create LaTeX table
+    # If PyBLP elasticities provided, add them
+    if (!is.null(elasticity_matrix_pyblp)) {
+        own_pyblp <- diag(elasticity_matrix_pyblp)
+        cross_pyblp <- elasticity_matrix_pyblp[row(elasticity_matrix_pyblp) != col(elasticity_matrix_pyblp)]
+        
+        pyblp_stats <- c(
+            min(own_pyblp), median(own_pyblp), max(own_pyblp),
+            min(cross_pyblp), median(cross_pyblp), max(cross_pyblp)
+        )
+        
+        # Create LaTeX table with PyBLP
+        comparison_table <- paste0(
+            "\\begin{table}[H] \\centering \n",
+            "  \\caption{Summary of Elasticities in Market 1: Logit vs.\\ BLP vs.\\ PyBLP} \n",
+            "  \\label{tab:elasticity_comparison} \n",
+            "\\begin{tabular}{@{\\extracolsep{5pt}}lcccccc} \n",
+            "\\\\[-1.8ex]\\hline \n",
+            "\\hline \\\\[-1.8ex] \n",
+            " & \\multicolumn{3}{c}{Own-Price} & \\multicolumn{3}{c}{Cross-Price} \\\\ \n",
+            "\\cline{2-4} \\cline{5-7}\n",
+            "Model & Min & Median & Max & Min & Median & Max \\\\ \n",
+            "\\hline \\\\[-1.8ex] \n",
+            sprintf("Multinomial Logit & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ \\\\ \n",
+                    logit_stats[1], logit_stats[2], logit_stats[3],
+                    logit_stats[4], logit_stats[5], logit_stats[6]),
+            sprintf("BLP (R) & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ \\\\ \n",
+                    blp_stats[1], blp_stats[2], blp_stats[3],
+                    blp_stats[4], blp_stats[5], blp_stats[6]),
+            sprintf("PyBLP (Python) & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ & $%.2f$ \\\\ \n",
+                    pyblp_stats[1], pyblp_stats[2], pyblp_stats[3],
+                    pyblp_stats[4], pyblp_stats[5], pyblp_stats[6]),
+            "\\hline \n",
+            "\\hline \\\\[-1.8ex] \n",
+            "\\end{tabular} \n",
+            "\\end{table}"
+        )
+        
+        return(list(
+            table = comparison_table,
+            logit_stats = logit_stats,
+            blp_stats = blp_stats,
+            pyblp_stats = pyblp_stats
+        ))
+    }
+    
+    # Original table without PyBLP
     comparison_table <- paste0(
         "\\begin{table}[H] \\centering \n",
         "  \\caption{Summary of Elasticities in Market 1: Logit vs.\\ BLP} \n",

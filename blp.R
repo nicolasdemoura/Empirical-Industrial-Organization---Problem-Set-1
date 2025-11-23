@@ -7,9 +7,9 @@
 ###############################################################################
 
 # Get initial_delta function
-get_initial_delta <- function(alpha, beta, data, product = "product", market = "market", price = "price", characteristics = NULL) {
-    # Compute delta_j as alpha * price_j + X_j * beta
-    delta <- alpha * data[[price]] + as.matrix(data[, characteristics]) %*% beta
+get_initial_delta <- function(alpha, beta, constant, data, product = "product", market = "market", price = "price", characteristics = NULL) {
+    # Compute delta_j as constant + alpha * price_j + X_j * beta
+    delta <- constant + alpha * data[[price]] + as.matrix(data[, characteristics]) %*% beta
     return(as.vector(delta))
 }
 
@@ -29,19 +29,22 @@ get_initial_alpha_beta <- function(data, product = "product", market = "market",
     
     alpha <- coefs[price]
     beta <- coefs[characteristics]
+    constant <- coefs["(Intercept)"]
     
-    return(list(alpha = alpha, beta = beta))
+    return(list(alpha = alpha, beta = beta, constant = constant))
 }
 
 
 # Estimate Share Function
-blp_share <- function(delta, sigma, data, indVarying_chars = NULL, N = 100, product = "product", market = "market", price = "price") {
+blp_share <- function(delta, sigma, data, indVarying_chars = NULL, N = 100, product = "product", market = "market", price = "price", v = NULL) {
     # Number of products and individuals
     M <- length(unique(data[[market]]))
     I <- N
 
-    # Draw shocks v iid from N(0,1)
-    v <- matrix(rnorm(I * length(sigma)), nrow = I, ncol = length(sigma))
+    # Draw shocks v iid from N(0,1) if not provided
+    if (is.null(v)) {
+        v <- matrix(rnorm(I * length(sigma)), nrow = I, ncol = length(sigma))
+    }
 
     # Initialize shares vector
     shares <- numeric(nrow(data))
@@ -73,15 +76,19 @@ blp_share <- function(delta, sigma, data, indVarying_chars = NULL, N = 100, prod
 }
 
 # get_delta function via contraction mapping ln(observed_shares) - ln(estimated_shares)
-get_delta <- function(delta_init, sigma, data, indVarying_chars, N, observed_shares, tol = 1e-6, max_iter = 1000, silent = FALSE) {
+get_delta <- function(delta_init, sigma, data, indVarying_chars, N, observed_shares, tol = 1e-6, max_iter = 1000, silent = FALSE, v = NULL) {
     delta <- delta_init
+    # Generate random draws once for consistency across iterations
+    if (is.null(v)) {
+        v <- matrix(rnorm(N * length(sigma)), nrow = N, ncol = length(sigma))
+    }
     if (!silent) {
         # Using progress package to show progress bar
         pb <- progress::progress_bar$new(total = max_iter, format = "  Contraction Mapping [:bar] :percent in :elapsed")
     }
     for (iter in 1:max_iter) {
         if (!silent) pb$tick()
-        estimated_shares <- blp_share(delta, sigma, data, indVarying_chars, N)
+        estimated_shares <- blp_share(delta, sigma, data, indVarying_chars, N, v = v)
         share_diff <- log(observed_shares) - log(estimated_shares)
         delta_new <- delta + share_diff
         if (max(abs(delta_new - delta)) < tol) {
@@ -107,21 +114,27 @@ get_theta1 <- function(delta, data, characteristics, instruments, price = "price
         return(moments)
     }
     
-    X <- as.matrix(data[, c(price, characteristics)])
-    Z <- as.matrix(data[, instruments])
+    X <- cbind(1, as.matrix(data[, c(price, characteristics)]))
+    # Z matrix for IV estimation:
+    # - Constant (exogenous)
+    # - Characteristics x1-x4 (exogenous, serve as own instruments)
+    # - External instruments iv1-iv6 (for price)
+    # This gives us 11 instruments total for 6 parameters
+    Z <- cbind(1, as.matrix(data[, characteristics]), as.matrix(data[, instruments]))
     
     # Initial values from 2SLS (overidentified system)
     PZ <- Z %*% solve(t(Z) %*% Z) %*% t(Z)
     init_theta <- solve(t(X) %*% PZ %*% X) %*% t(X) %*% PZ %*% delta
     
-    # Estimate using gmm package with two-step optimal weighting
+    # Estimate using gmm package with one-step for faster computation
     gmm_result <- gmm(g, x = list(X = X, Z = Z, delta = delta), 
                       t0 = as.vector(init_theta), 
-                      type = "twoStep",
-                      wmatrix = "optimal",
+                      type = "iterative",
+                      wmatrix = "ident",
                       vcov = "iid",
                       centeredVcov = TRUE,
-                      data = data)
+                      data = data,
+                      itermax = 1)
     
     # Compute cluster robust vcov
     vcov_cluster <- vcovCL(gmm_result, cluster = data[[market]])
@@ -142,24 +155,27 @@ gmm_moments_sigma <- function(sigma, x) {
     indVarying_chars <- x$indVarying_chars
     N <- x$N
     market <- x$market
+    v_draws <- x$v_draws  # Use pre-generated draws
     
     # Step 1: Get initial delta using simple logit
     init_params <- get_initial_alpha_beta(data, characteristics = characteristics, price = price, share = share)
     alpha_init <- init_params$alpha
     beta_init <- init_params$beta
-    delta_init <- get_initial_delta(alpha_init, beta_init, data, characteristics = characteristics, price = price)
+    constant_init <- init_params$constant
+    delta_init <- get_initial_delta(alpha_init, beta_init, constant_init, data, characteristics = characteristics, price = price)
     
     # Step 2: Get delta via contraction mapping given sigma
     observed_shares <- data[[share]]
-    delta <- get_delta(delta_init, sigma, data, indVarying_chars = indVarying_chars, N = N, observed_shares = observed_shares, silent = TRUE)
+    delta <- get_delta(delta_init, sigma, data, indVarying_chars = indVarying_chars, N = N, observed_shares = observed_shares, silent = TRUE, v = v_draws)
     
     # Step 3: Estimate theta1 (alpha, beta) via linear IV/GMM given delta and sigma
     theta1_result <- get_theta1(delta, data, characteristics, instruments, price = price, market = market)
     theta1 <- theta1_result$theta
     
     # Step 4: Compute residuals
-    X <- as.matrix(data[, c(price, characteristics)])
-    Z <- as.matrix(data[, instruments])
+    X <- cbind(1, as.matrix(data[, c(price, characteristics)]))
+    # Z includes: constant, exogenous characteristics, and external instruments
+    Z <- cbind(1, as.matrix(data[, characteristics]), as.matrix(data[, instruments]))
     predicted_delta <- X %*% theta1
     xi <- delta - predicted_delta
     
@@ -178,6 +194,10 @@ blp <- function(data, product = "product", market = "market", price = "price",
     library(gmm)
     library(sandwich)
     
+    # Generate random draws once for all sigma evaluations
+    set.seed(20251115)  # Match Python seed
+    v_draws <- matrix(rnorm(N * length(indVarying_chars)), nrow = N, ncol = length(indVarying_chars))
+    
     x_data <- list(
         data = data,
         characteristics = characteristics,
@@ -186,21 +206,23 @@ blp <- function(data, product = "product", market = "market", price = "price",
         share = share,
         indVarying_chars = indVarying_chars,
         N = N,
-        market = market
+        market = market,
+        v_draws = v_draws  # Pass pre-generated draws
     )
     
     gmm_sigma <- gmm(
         g = gmm_moments_sigma,
         x = x_data,
         t0 = 0.5,
-        type = "twoStep",
-        wmatrix = "optimal",
+        type = "iterative",
+        wmatrix = "ident",
         method = "Brent",
         lower = 0.01,
         upper = 10,
         vcov = "iid",
-        data = data, 
-        control = list(trace = 1)
+        data = data,
+        itermax = 1,
+        control = list(trace = 0)
     )
     
     # Compute cluster robust vcov for sigma
@@ -213,17 +235,21 @@ blp <- function(data, product = "product", market = "market", price = "price",
     init_params <- get_initial_alpha_beta(data, characteristics = characteristics, price = price, share = share)
     alpha_init <- init_params$alpha
     beta_init <- init_params$beta
-    delta_init <- get_initial_delta(alpha_init, beta_init, data, characteristics = characteristics, price = price)
+    constant_init <- init_params$constant
+    delta_init <- get_initial_delta(alpha_init, beta_init, constant_init, data, characteristics = characteristics, price = price)
     observed_shares <- data[[share]]
-    delta_final <- get_delta(delta_init, sigma_est, data, indVarying_chars = indVarying_chars, N = N, observed_shares = observed_shares, silent = FALSE)
+    # Generate consistent random draws for final estimation
+    set.seed(20251115)  # Ensure reproducibility
+    v_final <- matrix(rnorm(N * length(indVarying_chars)), nrow = N, ncol = length(indVarying_chars))
+    delta_final <- get_delta(delta_init, sigma_est, data, indVarying_chars = indVarying_chars, N = N, observed_shares = observed_shares, silent = FALSE, v = v_final)
     
-    # Step 3: Estimate theta1 (alpha, beta) via gmm package
+    # Step 3: Estimate theta1 (constant, alpha, beta) via gmm package
     theta1_result <- get_theta1(delta_final, data, characteristics, instruments, price = price, market = market)
     theta1_est <- theta1_result$theta
     gmm_theta1 <- theta1_result$gmm_result
     vcov_theta1_cluster <- theta1_result$vcov_cluster
     se_theta1 <- sqrt(diag(vcov_theta1_cluster))
-    X <- as.matrix(data[, c(price, characteristics)])
+    X <- cbind(1, as.matrix(data[, c(price, characteristics)]))
 
     # Compute residuals
     xi <- delta_final - X %*% theta1_est
@@ -262,13 +288,15 @@ blp <- function(data, product = "product", market = "market", price = "price",
 estimate_elasticities <- function(blp_params, data, product = "product", market = "market", price = "price", characteristics = c("x1", "x2", "x3", "x4"), indVarying_chars = c("x4"), N = 1000) {
     sigma <- blp_params$sigma
     delta <- blp_params$delta
-    alpha <- blp_params$theta1[1]
+    # theta1 = [constant, price, x1, x2, x3, x4], so alpha (price coef) is at index 2
+    alpha <- -blp_params$theta1[2]  # negative because price has negative effect on utility
     
     # Number of products and individuals
     M <- length(unique(data[[market]]))
     I <- N
     
-    # Draw shocks v iid from N(0,1)
+    # Draw shocks v iid from N(0,1) - use same seed as estimation
+    set.seed(20251115)
     v <- matrix(rnorm(I * length(sigma)), nrow = I, ncol = length(sigma))
     
     # Initialize elasticity matrix
@@ -306,11 +334,11 @@ estimate_elasticities <- function(blp_params, data, product = "product", market 
                 if (j == k) {
                     # Own-price elasticity (negative)
                     elasticity_matrix[market_data[[product]][j], market_data[[product]][k]] <- 
-                        alpha * mean(choice_probabilities[, j] * (1 - choice_probabilities[, j])) * (market_data[[price]][j] / shares[j])
+                        -alpha * mean(choice_probabilities[, j] * (1 - choice_probabilities[, j])) * (market_data[[price]][j] / shares[j])
                 } else {
                     # Cross-price elasticity (positive)
                     elasticity_matrix[market_data[[product]][j], market_data[[product]][k]] <- 
-                        -alpha * mean(choice_probabilities[, j] * choice_probabilities[, k]) * (market_data[[price]][k] / shares[j])
+                        alpha * mean(choice_probabilities[, j] * choice_probabilities[, k]) * (market_data[[price]][k] / shares[j])
                 }
             }
         }

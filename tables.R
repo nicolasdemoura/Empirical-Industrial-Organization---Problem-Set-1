@@ -96,7 +96,7 @@ create_logit_table <- function(ols_model, iv_model, data, market = "market", out
 }
 
 # Create parameter estimates table for BLP
-create_blp_table <- function(blp_params, output_file = NULL) {
+create_blp_table <- function(blp_params, output_file = NULL, python_estimates = NULL) {
     # Function to add significance stars
     add_stars <- function(coef, se) {
         t_stat <- coef / se
@@ -106,41 +106,105 @@ create_blp_table <- function(blp_params, output_file = NULL) {
                       ifelse(p_val < 0.1, "*", "")))
     }
     
-    # Extract coefficients and standard errors
+    # Extract coefficients and standard errors - CORRECT ORDER: constant, price, x1-x4
     coefs <- blp_params$theta1
     ses <- blp_params$se_theta1
-    param_names <- c("Price", "X1", "X2", "X3", "X4", "Constant")
+    param_names <- c("Constant", "Price", "X1", "X2", "X3", "X4")
     
     # Build LaTeX table
-    latex_table <- paste0(
-        "\\begin{table}[H] \\centering \n",
-        "  \\label{tab:blp_estimates} \n",
-        "\\begin{tabular}{@{\\extracolsep{5pt}}lc} \n",
-        "\\\\[-1.8ex]\\hline \n",
-        "\\hline \\\\[-1.8ex] \n",
-        " & \\textbf{BLP} \\\\ \n",
-        "\\hline \\\\[-1.8ex] \n"
-    )
-    
-    for (i in 1:6) {
+    if (!is.null(python_estimates)) {
+        # Include Python comparison column with SEs and significance
+        latex_table <- paste0(
+            "\\begin{table}[H] \\centering \n",
+            "  \\label{tab:blp_estimates} \n",
+            "\\begin{tabular}{@{\\extracolsep{5pt}}lcc} \n",
+            "\\\\[-1.8ex]\\hline \n",
+            "\\hline \\\\[-1.8ex] \n",
+            " & \\textbf{R BLP} & \\textbf{Python PyBLP} \\\\ \n",
+            "\\hline \\\\[-1.8ex] \n"
+        )
+        
+        for (i in 1:6) {
+            # Add stars for Python estimates if SEs are provided
+            if (!is.null(python_estimates$se_beta)) {
+                py_stars <- add_stars(python_estimates$beta[i], python_estimates$se_beta[i])
+                latex_table <- paste0(latex_table,
+                    sprintf("%s & $%.3f^{%s}$ & $%.3f^{%s}$ \\\\ \n",
+                            param_names[i],
+                            coefs[i],
+                            add_stars(coefs[i], ses[i]),
+                            python_estimates$beta[i],
+                            py_stars),
+                    sprintf(" & (%.3f) & (%.3f) \\\\ \n", ses[i], python_estimates$se_beta[i]),
+                    " & & \\\\ \n"
+                )
+            } else {
+                latex_table <- paste0(latex_table,
+                    sprintf("%s & $%.3f^{%s}$ & $%.3f$ \\\\ \n",
+                            param_names[i],
+                            coefs[i],
+                            add_stars(coefs[i], ses[i]),
+                            python_estimates$beta[i]),
+                    sprintf(" & (%.3f) & \\\\ \n", ses[i]),
+                    " & & \\\\ \n"
+                )
+            }
+        }
+        
+        # Add sigma_1 separately
+        if (!is.null(python_estimates$se_sigma)) {
+            py_sigma_stars <- add_stars(python_estimates$sigma, python_estimates$se_sigma)
+            latex_table <- paste0(latex_table,
+                sprintf("$\\\\sigma_1$ & $%.3f^{%s}$ & $%.3f^{%s}$ \\\\ \n",
+                        blp_params$sigma,
+                        add_stars(blp_params$sigma, blp_params$se_sigma),
+                        python_estimates$sigma,
+                        py_sigma_stars),
+                sprintf(" & (%.3f) & (%.3f) \\\\ \n", blp_params$se_sigma, python_estimates$se_sigma),
+                " & & \\\\ \n"
+            )
+        } else {
+            latex_table <- paste0(latex_table,
+                sprintf("$\\\\sigma_1$ & $%.3f^{%s}$ & $%.3f$ \\\\ \n",
+                        blp_params$sigma,
+                        add_stars(blp_params$sigma, blp_params$se_sigma),
+                        python_estimates$sigma),
+                sprintf(" & (%.3f) & \\\\ \n", blp_params$se_sigma),
+                " & & \\\\ \n"
+            )
+        }
+    } else {
+        # Original single column table
+        latex_table <- paste0(
+            "\\begin{table}[H] \\centering \n",
+            "  \\label{tab:blp_estimates} \n",
+            "\\begin{tabular}{@{\\extracolsep{5pt}}lc} \n",
+            "\\\\[-1.8ex]\\hline \n",
+            "\\hline \\\\[-1.8ex] \n",
+            " & \\textbf{BLP} \\\\ \n",
+            "\\hline \\\\[-1.8ex] \n"
+        )
+        
+        for (i in 1:6) {
+            latex_table <- paste0(latex_table,
+                sprintf("%s & $%.3f^{%s}$ \\\\ \n",
+                        param_names[i],
+                        coefs[i],
+                        add_stars(coefs[i], ses[i])),
+                sprintf(" & (%.3f) \\\\ \n", ses[i]),
+                " & \\\\ \n"
+            )
+        }
+        
+        # Add sigma_1 separately
         latex_table <- paste0(latex_table,
-            sprintf("%s & $%.3f^{%s}$ \\\\ \n",
-                    param_names[i],
-                    coefs[i],
-                    add_stars(coefs[i], ses[i])),
-            sprintf(" & (%.3f) \\\\ \n", ses[i]),
+            sprintf("$\\\\sigma_1$ & $%.3f^{%s}$ \\\\ \n",
+                    blp_params$sigma,
+                    add_stars(blp_params$sigma, blp_params$se_sigma)),
+            sprintf(" & (%.3f) \\\\ \n", blp_params$se_sigma),
             " & \\\\ \n"
         )
     }
-    
-    # Add sigma_1 separately
-    latex_table <- paste0(latex_table,
-        sprintf("$\\\\sigma_1$ & $%.3f^{%s}$ \\\\ \n",
-                blp_params$sigma,
-                add_stars(blp_params$sigma, blp_params$se_sigma)),
-        sprintf(" & (%.3f) \\\\ \n", blp_params$se_sigma),
-        " & \\\\ \n"
-    )
     
     latex_table <- paste0(latex_table,
         "\\hline \n",

@@ -111,9 +111,29 @@ ggsave("results/elasticities_heatmap_logit.png", gg_elasticities_logit,
 blp_params <- blp(data, product = "product", market = "market", price = "price",
                   characteristics = c("x1", "x2", "x3", "x4"),
                   instruments = c("iv1", "iv2", "iv3", "iv4", "iv5", "iv6"),
-                  share = "share")
+                  share = "share", N = 1000)
 
 create_blp_table(blp_params, output_file = "results/blp_parameter_estimates.tex")
+
+# Load Python PyBLP estimates for comparison
+python_beta <- read.csv("python/beta_estimates.csv")
+python_sigma <- read.csv("python/sigma_estimates.csv")
+
+# Python standard errors (from blp_results.txt)
+python_se_beta <- c(1.791313, 10.18339, 1.299349, 1.184628, 0.08664314, 0.1958329)
+python_se_sigma <- 2.830655
+
+python_estimates <- list(
+  beta = python_beta$estimate,
+  sigma = python_sigma$estimate[1],
+  se_beta = python_se_beta,
+  se_sigma = python_se_sigma
+)
+
+# Create comparison table with Python
+create_blp_table(blp_params, 
+                 output_file = "results/blp_parameter_estimates_comparison.tex",
+                 python_estimates = python_estimates)
 
 # 2.3 Own- and Cross-price Elasticities for Market 1
 elasticity_matrix_blp <- compute_blp_elasticities(
@@ -124,7 +144,7 @@ elasticity_matrix_blp <- compute_blp_elasticities(
   price = "price",
   characteristics = c("x1", "x2", "x3", "x4"),
   indVarying_chars = c("x4"),
-  N = 1000
+  N = 500
 )
 
 # Create and save heatmap
@@ -137,14 +157,29 @@ gg_elasticities_blp <- create_elasticity_heatmap(
 ggsave("results/elasticities_heatmap_blp.png", gg_elasticities_blp, 
        width = 12, height = 12, dpi = 300)
 
+# Load and visualize Python PyBLP elasticities
+python_elasticities <- read.csv("python/elasticities_market1.csv", row.names = 1)
+elasticity_matrix_pyblp <- as.matrix(python_elasticities)
+
+# Create heatmap for PyBLP elasticities
+gg_elasticities_pyblp <- create_elasticity_heatmap(
+  elasticity_matrix = elasticity_matrix_pyblp,
+  title = "Own- and Cross-Price Elasticities (PyBLP Model, Market 1)",
+  safe_colorblind_palette = safe_colorblind_palette
+)
+
+ggsave("results/elasticities_heatmap_pyblp.png", gg_elasticities_pyblp, 
+       width = 12, height = 12, dpi = 300)
+
 ###############################################################################
 # COMPARISON: LOGIT VS BLP ELASTICITIES
 ###############################################################################
 
-# Create comparison table
+# Create comparison table with PyBLP
 comparison_results <- create_elasticity_comparison_table(
   elasticity_matrix_logit = elasticity_matrix_logit,
-  elasticity_matrix_blp = elasticity_matrix_blp
+  elasticity_matrix_blp = elasticity_matrix_blp,
+  elasticity_matrix_pyblp = elasticity_matrix_pyblp
 )
 
 # Write to file
